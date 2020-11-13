@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.provider.ContactsContract
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -16,11 +17,16 @@ import com.android.homework.savestatehomework.R
 import com.android.homework.savestatehomework.db.AppDatabase
 import com.android.homework.savestatehomework.db.ContactsDao
 import com.android.homework.savestatehomework.db.model.Contact
+import io.reactivex.Completable
+import io.reactivex.android.schedulers.AndroidSchedulers
+import io.reactivex.observers.DisposableSingleObserver
+import io.reactivex.schedulers.Schedulers
 
 class ListFragment : Fragment() {
     companion object {
         fun newInstance() = ListFragment()
         private const val PERMISSION_REQUEST_CODE_READ_CONTACT: Int = 1
+        private const val TAG_DB = "tag_db"
     }
 
     private lateinit var db: AppDatabase
@@ -28,8 +34,8 @@ class ListFragment : Fragment() {
     private lateinit var recyclerView: RecyclerView
 
     override fun onCreateView(
-        inflater: LayoutInflater, container: ViewGroup?,
-        savedInstanceState: Bundle?
+            inflater: LayoutInflater, container: ViewGroup?,
+            savedInstanceState: Bundle?
     ): View? {
         val fragmentLayout = inflater.inflate(R.layout.fragment_list, container, false)
 
@@ -48,28 +54,40 @@ class ListFragment : Fragment() {
 
     override fun onActivityCreated(savedInstanceState: Bundle?) {
         super.onActivityCreated(savedInstanceState)
-        if (isDbEmpty()) {
-            getContactsFromPhone()
-        } else {
-            getContactsFromDb()
-        }
+        getContacts()
     }
 
-    private fun getContactsFromDb() {
-        val listContacts = contactsDao.getContacts()
-        showList(listContacts)
-        showToast("Контакты из базы данных приложения")
+    private fun getContacts() {
+        contactsDao.getContacts()
+                .subscribeOn(Schedulers.io())
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe(object : DisposableSingleObserver<List<Contact>>() {
+                    override fun onSuccess(listContacts: List<Contact>) {
+                        if (listContacts.isNotEmpty()) {
+                            showList(listContacts)
+                            showToast("Контакты из базы данных приложения")
+                        } else {
+                            getContactsFromPhone()
+                        }
+                    }
+
+                    override fun onError(e: Throwable) {
+                        e.message?.let { Log.e(TAG_DB, it) }
+                    }
+                })
     }
 
-    private fun isDbEmpty() = contactsDao.getAnyContact() == null
+    private fun saveListContactsInDb(list: List<Contact>) =
+            Completable.fromAction { contactsDao.insert(list) }.subscribeOn(Schedulers.io())
+                    .observeOn(AndroidSchedulers.mainThread()).subscribe()
 
     private fun getContactsFromPhone() {
         if (checkPermissionForContacts()) {
             showContactsFromPhone()
         } else {
             requestPermissions(
-                arrayOf(android.Manifest.permission.READ_CONTACTS),
-                PERMISSION_REQUEST_CODE_READ_CONTACT
+                    arrayOf(android.Manifest.permission.READ_CONTACTS),
+                    PERMISSION_REQUEST_CODE_READ_CONTACT
             )
         }
     }
@@ -82,9 +100,9 @@ class ListFragment : Fragment() {
     }
 
     override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
+            requestCode: Int,
+            permissions: Array<out String>,
+            grantResults: IntArray
     ) {
         if (requestCode == PERMISSION_REQUEST_CODE_READ_CONTACT) {
             if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
@@ -98,11 +116,11 @@ class ListFragment : Fragment() {
     private fun readContactsFromPhone(): List<Contact> {
         val listContacts = mutableListOf<Contact>()
         val cursor = context?.contentResolver?.query(
-            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-            null,
-            null,
-            null,
-            null
+                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                null,
+                null,
+                null,
+                null
         )
 
         cursor?.let {
@@ -110,9 +128,9 @@ class ListFragment : Fragment() {
                 while (it.moveToNext()) {
                     val id = it.getString(it.getColumnIndex(ContactsContract.Contacts._ID))
                     val fullName =
-                        it.getString(it.getColumnIndex(ContactsContract.Contacts.DISPLAY_NAME))
+                            it.getString(it.getColumnIndex(ContactsContract.Contacts.DISPLAY_NAME))
                     val phone =
-                        it.getString(it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER))
+                            it.getString(it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER))
                     val contact = Contact(id, fullName, phone)
                     listContacts.add(contact)
                 }
@@ -121,13 +139,11 @@ class ListFragment : Fragment() {
         return listContacts
     }
 
-    private fun saveListContactsInDb(contacts: List<Contact>) = contactsDao.insert(contacts)
-
     private fun showToast(text: String) = Toast.makeText(context, text, Toast.LENGTH_LONG).show()
 
     private fun checkPermissionForContacts() = (ContextCompat.checkSelfPermission(
-        context!!,
-        android.Manifest.permission.READ_CONTACTS
+            context!!,
+            android.Manifest.permission.READ_CONTACTS
     ) == PackageManager.PERMISSION_GRANTED)
 
     private fun showList(list: List<Contact>) {

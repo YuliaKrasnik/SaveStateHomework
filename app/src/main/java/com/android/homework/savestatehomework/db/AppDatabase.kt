@@ -20,7 +20,6 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "database"
                 )
-                    .allowMainThreadQueries()
                     .build()
             }
             return instance!!
